@@ -1,0 +1,349 @@
+---
+title: "Bird Diversity Analysis"
+author: "Julie Fortin"
+date: "2022/04/27"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+This project studies landscape and bird diversity change in a mountainous area (the Willmore Wilderness Park in Alberta, Canada) over the last century.
+
+We have data on past and current land cover composition (historic and repeat photos & their land cover classifications). 
+The 10 land cover categories are: Coniferous forest, Broadleaf forest, Mixedwood forest, Wetland, Shrub, Herbaceous, Rock, Water, Regenerating area, Snow/Ice.
+
+We have species distribution models (made from auditory survey data and Landsat-based land cover map). 
+The 15 bird species are: American pipit, American robin, Chipping sparrow, Dark-eyed junco, Golden-crowned kinglet, Golden-crowned sparrow, Gray jay, Hermit thrush, Pine siskin, Ruby-crowned kinglet, Savannah sparrow, Swainson's thrush, Varied thrush, Wilson's warbler, Yellow-rumped warbler.
+
+
+```{r load packages, message=FALSE}
+
+# Load packages
+library(here)
+library(readxl)
+library(tidyverse)
+library(vegan)
+
+```
+
+## Load data
+
+* Raw data consists of Mountain Legacy Project (MLP) photos (Photographs.zip)
+* Pre-processed data consists of image classifications (LandCoverClassifications.zip)
+* Processed data is in ImageAnalysis.xlsx
+  + Each tab is an MLP station (i.e. photograph pair)
+  + Classified photos were uploaded to the MLP's [Image Analysis Toolkit](http://mountainlegacy.ca/image-analysis-toolkit/)
+  + Land cover % outputs from IAT were copied back into ImageAnalysis.xlsx
+  + Model backtransformations are done to get probability of occurrence in both historical and repeat photos for each station
+  + Then there is a tab for land cover summary across all photograph pairs
+  + And a tab aggregating outputs for all historical images
+  + And a tab aggregating outputs for all repeat images
+
+
+```{r load data}
+
+historicdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Historic") %>%
+  mutate(TIME = "Historic")
+repeatdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Repeat") %>%
+  mutate(TIME = "Repeat")
+data <- rbind(historicdata, repeatdata) %>%
+  pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
+  pivot_longer(cols=GRAJ:VATH, names_to="SPECIES", values_to="SPECIES_OCCURRENCE") %>%
+  mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor))
+
+landcovertypes <- read.csv(here("ProcessedData", "LandcoverLookup.csv"))
+species <- read.csv(here("ProcessedData", "SpeciesLookup.csv")) %>%
+  mutate(NAMESEP = gsub(" ", " \n ", NAME)) # for plotting later
+
+```
+
+## Calculate diversity
+
+Calculate diversity indices for both land cover and species.
+
+```{r calculate diversity}
+
+data <- data %>%
+  group_by(STATION, TIME, SPECIES) %>%
+  mutate(LANDCOVER_DIV = diversity(LANDCOVER_PERCENT, index="shannon")) %>%
+  ungroup() %>%
+  group_by(STATION, TIME, LANDCOVER) %>%
+  mutate(SPECIES_DIV = diversity(SPECIES_OCCURRENCE, index="shannon")) %>%
+  ungroup()
+
+```
+
+## Examine land cover change
+
+Run paired t-tests for each land cover type and for land cover diversity.
+We chose paired t-tests because the samples (photographs) are not independent - it's the same landscape at two different times. 
+
+T-tests are relatively robust to deviations from assumptions, but assumptions are:
+
+* Continuous data 
+* Random samples 
+* Homogeneity of variance 
+* Distribution approximately normal 
+
+
+```{r land cover change}
+
+# Prep data
+landcoverdata  <- data %>% 
+  select(STATION, TIME, LANDCOVER, LANDCOVER_PERCENT) %>%
+  unique()
+
+# Print t-test results for each land cover type
+for (lc in landcovertypes$CODE) {
+  print(landcovertypes$NAME[which(landcovertypes$CODE==lc)])
+  print(t.test(landcoverdata %>% filter(LANDCOVER==lc, TIME=="Historic") %>% pull(LANDCOVER_PERCENT),
+         landcoverdata %>% filter(LANDCOVER==lc, TIME=="Repeat") %>% pull(LANDCOVER_PERCENT),
+         paired=T))
+}
+
+# Overall landscape diversity
+print(t.test(data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV),
+             data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV),
+             paired=T))
+
+# Historical landscape diversity
+data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV) %>% mean()
+data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV) %>% sd()/sqrt(46) # standard error
+
+# Repeat landscape diversity
+data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV) %>% mean()
+data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV) %>% sd()/sqrt(46) # standard error
+
+
+```
+Given these outputs, we can see which land cover types changed. We can also be confident that the landscape diversity declined between the historical photos and the repeat photos.
+
+
+## Examine bird diversity change
+
+Run paired t-tests for each bird species and for bird diversity.
+We chose paired t-tests because the samples (photographs) are not independent - it's the same landscape at two different times. 
+
+```{r bird diversity change}
+
+birddata  <- data %>% 
+  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE) %>%
+  unique()
+
+for (spp in species$CODE) {
+  print(species$NAME[which(species$CODE==spp)])
+  print(t.test(birddata %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE),
+               birddata %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE),
+               paired=T))
+}
+
+# Overall bird diversity
+print(t.test(data %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV),
+             data %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV),
+             paired=T))
+
+```
+
+At the species level, many species were affected and changed in probability of occurrence between the two time points. However, we cannot say that the species diversity changed significantly between the two time periods.
+
+
+## Plot bird diversity changes
+
+Create a data frame with the t-test outputs to make it easier to plot. 
+
+```{r prep to plot}
+
+birddata  <- data %>% 
+  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE) %>%
+  unique()
+
+df <- data.frame(CODE=NA, ESTIMATE=NA, CI_LOW=NA, CI_HIGH=NA)
+for (spp in species$CODE) {
+  testoutput <- t.test(birddata %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE),
+                       birddata %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE),
+                       paired=T)
+  row <- c(spp, testoutput$estimate, testoutput$conf.int[1], testoutput$conf.int[2])
+  df <- rbind(df, row)
+}
+df <- df[-1,] # remove the NA row
+
+```
+
+Link to external data on each species:
+
+* Breeding habitat
+* Non-breeding habitat
+* Conservation concern
+
+Source: [State of North America's Birds 2016 Report](https://www.stateofthebirds.org/2016/resources/species-assessments/)
+
+```{r link to external data}
+
+sonab <- read_xlsx(here("ProcessedData","assessment-table-full.xlsx"), sheet="SONAB database for distribution") %>%
+  filter(`English Name` %in% species$NAME) %>%
+  select(`English Name`, `Breeding Habitats`, `Non-breeding Habitats`, CCSmax) %>%
+  rename(NAME = `English Name`) 
+
+# Regroup habitats based on classes that match the categories we used in our analysis
+sonab <- sonab %>%
+  rename(BREEDING = `Breeding Habitats`,
+         NONBREEDING = `Non-breeding Habitats`,
+         CONSERVATION = CCSmax) %>% 
+  mutate(BREEDING = gsub("Arctic tundra", "", BREEDING), # remove classes that don't exist in our study area
+         BREEDING = gsub("Temperate western forest", "", BREEDING), 
+         BREEDING = gsub("Temperate eastern forest", "", BREEDING),
+         BREEDING = gsub("Mexican highland forest", "", BREEDING),
+         BREEDING = gsub("Mexican pine and oak forest", "", BREEDING),
+         BREEDING = gsub("Temperate grassland", "", BREEDING),
+         BREEDING = gsub("Agricultural", "", BREEDING),
+         BREEDING = gsub("Alpine tundra", "Herbaceous", BREEDING), # rename to match our class names
+         BREEDING = gsub("Boreal forest", "Forest", BREEDING),
+         BREEDING = gsub(";", "", BREEDING),
+         BREEDING = trimws(BREEDING)) %>% 
+  mutate(NONBREEDING = gsub("Beach and estuary", "", NONBREEDING), # remove classes that don't exist in our study area
+         NONBREEDING = gsub("Agricultural", "", NONBREEDING),
+         NONBREEDING = gsub("Coastal saltmarsh", "", NONBREEDING),
+         NONBREEDING = gsub("Tropical highland forest", "", NONBREEDING),
+         NONBREEDING = gsub("Temperate grassland", "Herbaceous", NONBREEDING), # rename to match our class names
+         NONBREEDING = gsub("Temperate western forest", "Forest", NONBREEDING),
+         NONBREEDING = gsub("Tropical evergreen forest", "Herbaceous", NONBREEDING),
+         NONBREEDING = gsub("Boreal forest", "Forest", NONBREEDING),
+         NONBREEDING = gsub(";", "", NONBREEDING), 
+         NONBREEDING = trimws(NONBREEDING)) %>% 
+  mutate(CONSERVATION = replace(CONSERVATION, which(CONSERVATION %in% as.character(5:8)), "Low"), # cut offs as per https://www.stateofthebirds.org/2016/overview/methods/
+         CONSERVATION = replace(CONSERVATION, which(CONSERVATION %in% as.character(9:13)), "Moderate")) %>%
+  left_join(species, by="NAME")
+
+df <- left_join(df, sonab, by="CODE")
+
+df$ESTIMATE <- as.numeric(df$ESTIMATE)
+df$CI_LOW <- as.numeric(df$CI_LOW)
+df$CI_HIGH <- as.numeric(df$CI_HIGH)
+df$NAME <- factor(df$NAME)
+df$BREEDING <- factor(df$BREEDING)
+df$NONBREEDING <- factor(df$NONBREEDING)
+df$CONSERVATION <- factor(df$CONSERVATION)
+
+```
+
+
+Make plots used in manuscript.
+
+```{r plot breeding habitat}
+
+plot1 <- ggplot(data=df, aes(x=reorder(NAMESEP,ESTIMATE), y=ESTIMATE, fill=BREEDING)) +
+  theme_bw() +
+  geom_bar(stat="identity",position=position_dodge(0.9)) +
+  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
+  scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
+                                         "Herbaceous" = rgb(153/256,153/256,50/256), 
+                                         "Forest generalist" = rgb(95/256,196/256,128/256))) +
+  labs(x="Species",y="Change") +
+  ggtitle("Change in species occurrence \nby breeding habitat") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text  = element_text(),
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+        axis.title = element_text(face="bold"),
+        text       = element_text(),
+        panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
+        plot.background = element_rect(fill="transparent", colour=NA),
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank(),
+        legend.title = element_blank(),
+        legend.position = c(0.01,0.99),
+        legend.background = element_blank(),
+        legend.justification = c("left","top"))+
+  geom_hline(yintercept = 0, size=0.2)
+        
+plot1
+
+```
+
+As we can see from this plot, species whose main breeding habitat is not forest have declined more than species that breed in forest.
+
+
+``` {r plot non-breeding habitat}
+
+plot2 <- ggplot(data=df, aes(x=reorder(NAMESEP,ESTIMATE), y=ESTIMATE, fill=NONBREEDING)) +
+  theme_bw() +
+  geom_bar(stat="identity",position=position_dodge(0.9)) +
+  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
+  scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
+                                         "Herbaceous" = rgb(153/256,153/256,50/256), 
+                                         "Forest generalist" = rgb(95/256,196/256,128/256),
+                                         "Generalist" = rgb(136/256,35/256,84/256))) +
+  labs(x="Species",y="Change") +
+  ggtitle("Change in species occurrence \nby non-breeding habitat") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text  = element_text(),
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+        axis.title = element_text(face="bold"),
+        text       = element_text(),
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank(),
+        legend.title = element_blank(),
+        legend.position = c(0.01,0.99),
+        legend.background = element_blank(),
+        legend.justification = c("left","top"))+
+  geom_hline(yintercept = 0, size=0.2)
+        
+plot2
+
+```
+
+As we can see from this plot, species' non-breeding habitat does not show a clear correlation with direction of change. Generally, forest-dwelling species are positively affected and herbaceous-dwelling species are negatively affected.
+
+
+``` {r plot conservation concern}
+
+plot3 <- ggplot(data=df, aes(x=reorder(NAMESEP,ESTIMATE), y=ESTIMATE, fill=CONSERVATION)) +
+  theme_bw() +
+  geom_bar(stat="identity",position=position_dodge(0.9)) +
+  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
+  scale_fill_manual("Legend", values = c("Low" = rgb(136/256,205/256,238/256),
+                                         "Moderate" = rgb(188/256,94/256,109/256))) +
+  labs(x="Species",y="Change") +
+  ggtitle("Change in species occurrence \nby level of conservation concern") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text  = element_text(),
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
+        axis.title = element_text(face="bold"),
+        text       = element_text(),
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank(),
+        legend.title = element_blank(),
+        legend.position = c(0.01,0.99),
+        legend.background = element_blank(),
+        legend.justification = c("left","top"))+
+  geom_hline(yintercept = 0, size=0.2)
+       
+plot3
+
+```
+
+As we can see from this plot, the level of conservation concern of the species does not show a clear correlation with direction of change.
+
+``` {r save plots, include=FALSE, eval=FALSE}
+
+ggsave(plot = plot1, file = "../Fig2.png", 
+       type = "cairo-png",  bg = "transparent",
+       width = 20, height = 15, units = "cm", dpi = 300)
+
+ggsave(plot = plot2, file = "./FigS1.png", 
+       type = "cairo-png",  bg = "transparent",
+       width = 20, height = 15, units = "cm", dpi = 300)
+
+ggsave(plot = plot3, file = "./FigS2.png", 
+       type = "cairo-png",  bg = "transparent",
+       width = 20, height = 15, units = "cm", dpi = 300)
+
+```
+
+
+
