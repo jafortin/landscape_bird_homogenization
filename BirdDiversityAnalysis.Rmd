@@ -1,7 +1,7 @@
 ---
 title: "Bird Diversity Analysis"
 author: "Julie Fortin"
-date: "2022/04/27"
+date: "2023/03/11"
 output:
   pdf_document: default
   html_document: default
@@ -48,17 +48,17 @@ library(vegan)
 
 ```{r load data}
 
-historicdata <- read_xlsx(here("SupplementaryData","ImageAnalysis.xlsx"), sheet="Historic") %>%
+historicdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Historic") %>%
   mutate(TIME = "Historic")
-repeatdata <- read_xlsx(here("SupplementaryData","ImageAnalysis.xlsx"), sheet="Repeat") %>%
+repeatdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Repeat") %>%
   mutate(TIME = "Repeat")
 data <- rbind(historicdata, repeatdata) %>%
   pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
   pivot_longer(cols=GRAJ:VATH, names_to="SPECIES", values_to="SPECIES_OCCURRENCE") %>%
   mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor))
 
-landcovertypes <- read.csv(here("SupplementaryData", "LandcoverLookup.csv"))
-species <- read.csv(here("SupplementaryData", "SpeciesLookup.csv")) %>%
+landcovertypes <- read.csv(here("ProcessedData", "LandcoverLookup.csv"))
+species <- read.csv(here("ProcessedData", "SpeciesLookup.csv")) %>%
   mutate(NAMESEP = gsub(" ", " \n ", NAME)) # for plotting later
 
 ```
@@ -185,7 +185,7 @@ Source: [State of North America's Birds 2016 Report](https://www.stateofthebirds
 
 ```{r link to external data}
 
-sonab <- read_xlsx(here("SupplementaryData","assessment-table-full.xlsx"), sheet="SONAB database for distribution") %>%
+sonab <- read_xlsx(here("ProcessedData","assessment-table-full.xlsx"), sheet="SONAB database for distribution") %>%
   filter(`English Name` %in% species$NAME) %>%
   select(`English Name`, `Breeding Habitats`, `Non-breeding Habitats`, CCSmax) %>%
   rename(NAME = `English Name`) 
@@ -255,8 +255,8 @@ plot1 <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=BREEDING)) +
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
         axis.title = element_text(face="bold"),
         text       = element_text(),
-        panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
-        plot.background = element_rect(fill="transparent", colour=NA),
+        # panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
+        # plot.background = element_rect(fill="transparent", colour=NA),
         panel.grid.minor = element_blank(), 
         panel.grid.major = element_blank(),
         legend.title = element_blank(),
@@ -343,9 +343,9 @@ Load the lower bound (coefficient-SE) and upper bound (coefficient+SE) data.
 
 ```{r load lower bound}
 
-historicdata_lb <- read_xlsx(here("SupplementaryData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Historic") %>%
+historicdata_lb <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Historic") %>%
   mutate(TIME = "Historic")
-repeatdata_lb <- read_xlsx(here("SupplementaryData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Repeat") %>%
+repeatdata_lb <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Repeat") %>%
   mutate(TIME = "Repeat")
 data_lb <- rbind(historicdata_lb, repeatdata_lb) %>%
   pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
@@ -369,9 +369,9 @@ data_lb %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Re
 
 ```{r load upper bound}
 
-historicdata_ub <- read_xlsx(here("SupplementaryData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Historic") %>%
+historicdata_ub <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Historic") %>%
   mutate(TIME = "Historic")
-repeatdata_ub <- read_xlsx(here("SupplementaryData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Repeat") %>%
+repeatdata_ub <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Repeat") %>%
   mutate(TIME = "Repeat")
 data_ub <- rbind(historicdata_ub, repeatdata_ub) %>%
   pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
@@ -595,23 +595,23 @@ plot5
 
 # Save all plots to output files
 
-ggsave(plot = plot1, file = "../Fig4.png", 
+ggsave(plot = plot1, file = "Fig4.png", 
        type = "cairo-png",  bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 300)
 
-ggsave(plot = plot2, file = "./FigS1a.png", 
+ggsave(plot = plot2, file = "FigS1a.png", 
        type = "cairo-png",  bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 300)
 
-ggsave(plot = plot3, file = "./FigS1b.png", 
+ggsave(plot = plot3, file = "FigS1b.png", 
        type = "cairo-png",  bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 300)
 
-ggsave(plot = plot4, file = "./FigS2a.png",
+ggsave(plot = plot4, file = "FigS2a.png",
        type = "cairo-png",  bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 300)
 
-ggsave(plot = plot5, file = "./FigS2b.png",
+ggsave(plot = plot5, file = "FigS2c.png",
        type = "cairo-png",  bg = "transparent",
        width = 20, height = 15, units = "cm", dpi = 300)
 

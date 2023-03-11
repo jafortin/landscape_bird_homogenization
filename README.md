@@ -11,7 +11,7 @@ We have data on past and current land cover composition (historic and repeat pho
 The 10 land cover categories are: Coniferous forest, Broadleaf forest, Mixedwood forest, Wetland, Shrub, Herbaceous, Rock, Water, Regenerating area, Snow/Ice.
 
 We have species distribution models (made from auditory survey data and Landsat-based land cover map). 
-The 15 bird species are: American pipit, American robin, Chipping sparrow, Dark-eyed junco, Golden-crowned kinglet, Golden-crowned sparrow, Gray jay, Hermit thrush, Pine siskin, Ruby-crowned kinglet, Savannah sparrow, Swainson's thrush, Varied thrush, Wilson's warbler, Yellow-rumped warbler.
+The 13 bird species are: American pipit, American robin, Chipping sparrow, Dark-eyed junco, Golden-crowned kinglet, Golden-crowned sparrow, Gray jay, Hermit thrush, Pine siskin, Ruby-crowned kinglet, Savannah sparrow, Wilson's warbler, Yellow-rumped warbler.
 
 
 
