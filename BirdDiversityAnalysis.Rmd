@@ -1,25 +1,17 @@
 ---
-title: "Bird Diversity Analysis"
+title: "BirdDiversityAnalysis"
 author: "Julie Fortin"
-date: "2023/03/11"
-output:
-  pdf_document: default
-  html_document: default
+date: "`r Sys.Date()`"
+output: html_document
 ---
 
+## Set up
+
 ```{r setup, include=FALSE}
+
 knitr::opts_chunk$set(echo = TRUE)
+
 ```
-
-## Summary
-
-This project studies landscape and bird diversity change in a mountainous area (the Willmore Wilderness Park in Alberta, Canada) over the last century.
-
-We have data on past and current land cover composition (historic and repeat photos & their land cover classifications). 
-The 10 land cover categories are: Coniferous forest, Broadleaf forest, Mixedwood forest, Wetland, Shrub, Herbaceous, Rock, Water, Regenerating area, Snow/Ice.
-
-We have species distribution models (made from auditory survey data and Landsat-based land cover map). 
-The 15 bird species are: American pipit, American robin, Chipping sparrow, Dark-eyed junco, Golden-crowned kinglet, Golden-crowned sparrow, Gray jay, Hermit thrush, Pine siskin, Ruby-crowned kinglet, Savannah sparrow, Swainson's thrush, Varied thrush, Wilson's warbler, Yellow-rumped warbler.
 
 
 ```{r load packages, message=FALSE}
@@ -29,43 +21,147 @@ library(here)
 library(readxl)
 library(tidyverse)
 library(vegan)
+library(ecolTest)
+library(boot)
 
 ```
 
+For reproducibility, we show R version and package versions used in this analysis.
+
+```{r reproducibility}
+
+print(sessionInfo())
+
+```
+
+The following section allows us to easily run a sensitivity analysis. We do a first run where we predict the probability of occurrence of each species using the $\beta$ estimates for its species distribution model. For the lower bound (i.e. sensitivity == "lb"), we predict the probability of occurrence of each species using the model's $\beta - SE$ (standard error). For the upper bound (i.e. sensitivity == "ub"), we use $\beta + SE$.
+
+```{r sensitivity set-up}
+
+# Set the parameters for this run
+# i.e, is it the default run (beta estimate)
+# or is it a sensitivity analysis (lower bound, upper bound)
+sensitivity <- "" # change to lb, ub respectively
+
+```
+
+
+## Summary
+
+This project studies landscape and bird diversity change in a mountainous area (the Willmore Wilderness Park in Alberta, Canada) over the last century.
+
+We have data on past and current land cover composition (historic and repeat photos & their land cover classifications). 
+The 10 land cover categories are: Coniferous forest, Broadleaf forest, Mixedwood forest, Wetland, Shrub, Herbaceous, Rock, Water, Regenerating area (i.e. post wildfire), Snow/Ice.
+
+We have species distribution models (made from auditory survey data and a Landsat-based land cover map). 
+The 15 bird species are: American pipit, American robin, Chipping sparrow, Dark-eyed junco, Golden-crowned kinglet, Golden-crowned sparrow, Gray jay (i.e. Canada jay), Hermit thrush, Pine siskin, Ruby-crowned kinglet, Savannah sparrow, Swainson's thrush, Varied thrush, Wilson's warbler, Yellow-rumped warbler.
+
+
 ## Load data
 
-* Raw data consists of Mountain Legacy Project (MLP) photos (Photographs.zip)
-* Pre-processed data consists of image classifications (LandCoverClassifications.zip)
-* Processed data is in ImageAnalysis.xlsx
+* Raw data consists of Mountain Legacy Project (MLP) photos (we do not load here)
+* Pre-processed data consists of image classifications (we do not load here)
+* Processed data is in ImageAnalysis.xlsx (we load this here)
   + Each tab is an MLP station (i.e. photograph pair)
-  + Classified photos were uploaded to the MLP's [Image Analysis Toolkit](http://mountainlegacy.ca/image-analysis-toolkit/)
+  + Classified photos were uploaded to IAT (http://mountainlegacy.ca/image-analysis-toolkit/)
   + Land cover % outputs from IAT were copied back into ImageAnalysis.xlsx
-  + Model backtransformations are done to get probability of occurrence in both historical and repeat photos for each station
   + Then there is a tab for land cover summary across all photograph pairs
   + And a tab aggregating outputs for all historical images
   + And a tab aggregating outputs for all repeat images
+* Lookup tables allow us to link land cover codes to land cover type names and species codes to species names
 
 
 ```{r load data}
 
-historicdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Historic") %>%
+historicdata <- read_xlsx(here("ProcessedData/ImageAnalysis.xlsx"), sheet="Historic") %>%
+  select(c(STATION,CF,BF,MF,WE,SH,HE,RO,WA,RG,SN)) %>%
   mutate(TIME = "Historic")
-repeatdata <- read_xlsx(here("ProcessedData","ImageAnalysis.xlsx"), sheet="Repeat") %>%
+repeatdata <- read_xlsx(here("ProcessedData/ImageAnalysis.xlsx"), sheet="Repeat") %>%
+  select(c(STATION,CF,BF,MF,WE,SH,HE,RO,WA,RG,SN)) %>%
   mutate(TIME = "Repeat")
-data <- rbind(historicdata, repeatdata) %>%
-  pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
-  pivot_longer(cols=GRAJ:VATH, names_to="SPECIES", values_to="SPECIES_OCCURRENCE") %>%
-  mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor))
+data <- rbind(historicdata, repeatdata)
 
-landcovertypes <- read.csv(here("ProcessedData", "LandcoverLookup.csv"))
-species <- read.csv(here("ProcessedData", "SpeciesLookup.csv")) %>%
+landcovertypes <- read.csv(here("LandcoverLookup.csv"))
+species <- read.csv(here("SpeciesLookup.csv")) %>%
   mutate(NAMESEP = gsub(" ", " \n ", NAME)) # for plotting later
+
+```
+
+## Calculate species occurrence
+
+We have species distribution models for each species (provided by a colleague and therefore not included in this code. See Table 1 in the manuscript). We use `plogis` to backtransform these models such that we can estimate probability of occurrence based on the percent cover of each land cover type.
+
+We calculate the main estimate, plus (as part of our sensitivity analysis) the lower bound and upper bound (by using +/- the standard error for the estimates of the intercept and coefficients).
+
+```{r backtransform occurrence}
+
+if (sensitivity == "") {
+data <- data %>%
+  mutate(GRAJ = plogis(-4.41432 + 0.04345*CF + 0.06422*SH),
+         WIWA = plogis(-2.04493 + -0.05813*HE + 0.07854*SH),
+         SAVS = plogis(-5.26319 + 0.23697*HE),
+         GCKI = plogis(-6.22088 + 0.04872*CF + 0.04949*WE + 0.04056*SH),
+         RCKI = plogis(-4.84614 + 0.03008*CF + 0.73270*BF + 0.03927*WE + 0.04634*SH),
+         DEJU = plogis(-1.56105 + -0.14222*HE + 0.04149*SH),
+         AMRO = plogis(-0.802771 + -0.025303*CF + 0.485604*BF),
+         HETH = plogis(-2.360104 + 0.014709*CF + 0.938919*BF + -0.018119*WE),
+         PISI = plogis(-1.022244 + 0.015959*CF + -2.130380*BF),
+         AMPI = plogis(0.21381 + -0.08054*CF + -0.03271*WE + 0.72939*BF),
+         GCSP = plogis(-0.11314 + -0.08410*CF + -0.02521*WE + 1.28239*BF),
+         SWTH = plogis(-9.52346 + 0.07140*CF + 0.11318*WE + 0.14192*SH + 1.47314*BF),
+         YRWA = plogis(-1.00599 + 0.03107*CF + -0.12507*HE),
+         CHSP = plogis(1.049734 + -0.018323*CF + -0.023371*WE + -0.012844*HE),
+         VATH = plogis(-3.79240 + 1.94461*BF + -0.10873*WE + 0.04748*SH))
+}
+
+if (sensitivity == "lb") {
+data <- data %>%
+  mutate(GRAJ = plogis((-4.41432-0.83430) + (0.04345-0.01026)*CF + (0.06422-0.02529)*SH),
+         WIWA = plogis((-2.04493-0.37147) + (-0.05813-0.03198)*HE + (0.07854-0.02332)*SH),
+         SAVS = plogis((-5.26319-0.80942) + (0.23697-0.06716)*HE),
+         GCKI = plogis((-6.22088-1.39384) + (0.04872-0.01441)*CF + (0.04949-0.01494)*WE + (0.04056-0.01909)*SH),
+         RCKI = plogis((-4.84614-1.22028) + (0.03008-0.01287)*CF + (0.73270-0.35501)*BF + (0.03927-0.02034)*WE + (0.04634-0.02560)*SH),
+         DEJU = plogis((-1.56105-0.27146) + (-0.14222-0.04567)*HE + (0.04149-0.01661)*SH),
+         AMRO = plogis((-0.802771-0.371008) + (-0.025303-0.008502)*CF + (0.485604-0.255258)*BF),
+         HETH = plogis((-2.360104-0.529999) + (0.014709-0.007358)*CF + (0.938919-0.331041)*BF + (-0.018119-0.019003)*WE),
+         PISI = plogis((-1.022244-0.395315) + (0.015959-0.007274)*CF + (-2.130380-0.655748)*BF),
+         AMPI = plogis((0.21381-0.19584) + (-0.08054-0.01531)*CF + (-0.03271-0.01274)*WE + (0.72939-0.23281)*BF),
+         GCSP = plogis((-0.11314-0.21668) + (-0.08410-0.01982)*CF + (-0.02521-0.01239)*WE + (1.28239-0.38444)*BF),
+         SWTH = plogis((-9.52346-1.99620) + (0.07140-0.01844)*CF + (0.11318-0.03814)*WE + (0.14192-0.04857)*SH + (1.47314-0.66464)*BF),
+         YRWA = plogis((-1.00599-0.92673) + (0.03107-0.01232)*CF + (-0.12507-0.06328)*HE),
+         CHSP = plogis((1.049734-0.468174) + (-0.018323-0.006169)*CF + (-0.023371-0.008305)*WE + (-0.012844-0.007985)*HE),
+         VATH = plogis((-3.79240-0.89230) + (1.94461-0.65889)*BF + (-0.10873-0.09755)*WE + (0.04748-0.03787)*SH))
+}
+
+if (sensitivity == "ub") {
+data <- data %>%
+  mutate(GRAJ = plogis((-4.41432+0.83430) + (0.04345+0.01026)*CF + (0.06422+0.02529)*SH),
+         WIWA = plogis((-2.04493+0.37147) + (-0.05813+0.03198)*HE + (0.07854+0.02332)*SH),
+         SAVS = plogis((-5.26319+0.80942) + (0.23697+0.06716)*HE),
+         GCKI = plogis((-6.22088+1.39384) + (0.04872+0.01441)*CF + (0.04949+0.01494)*WE + (0.04056+0.01909)*SH),
+         RCKI = plogis((-4.84614+1.22028) + (0.03008+0.01287)*CF + (0.73270+0.35501)*BF + (0.03927+0.02034)*WE + (0.04634+0.02560)*SH),
+         DEJU = plogis((-1.56105+0.27146) + (-0.14222+0.04567)*HE + (0.04149+0.01661)*SH),
+         AMRO = plogis((-0.802771+0.371008) + (-0.025303+0.008502)*CF + (0.485604+0.255258)*BF),
+         HETH = plogis((-2.360104+0.529999) + (0.014709+0.007358)*CF + (0.938919+0.331041)*BF + (-0.018119+0.019003)*WE),
+         PISI = plogis((-1.022244+0.395315) + (0.015959+0.007274)*CF + (-2.130380+0.655748)*BF),
+         AMPI = plogis((0.21381+0.19584) + (-0.08054+0.01531)*CF + (-0.03271+0.01274)*WE + (0.72939+0.23281)*BF),
+         GCSP = plogis((-0.11314+0.21668) + (-0.08410+0.01982)*CF + (-0.02521+0.01239)*WE + (1.28239+0.38444)*BF),
+         SWTH = plogis((-9.52346+1.99620) + (0.07140+0.01844)*CF + (0.11318+0.03814)*WE + (0.14192+0.04857)*SH + (1.47314+0.66464)*BF),
+         YRWA = plogis((-1.00599+0.92673) + (0.03107+0.01232)*CF + (-0.12507+0.06328)*HE),
+         CHSP = plogis((1.049734+0.468174) + (-0.018323+0.006169)*CF + (-0.023371+0.008305)*WE + (-0.012844+0.007985)*HE),
+         VATH = plogis((-3.79240+0.89230) + (1.94461+0.65889)*BF + (-0.10873+0.09755)*WE + (0.04748+0.03787)*SH))
+}
+
+data <- data %>%
+  pivot_longer(cols=c(CF,BF,MF,WE,SH,HE,RO,WA,RG,SN), names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
+  pivot_longer(cols=c(GRAJ,WIWA,SAVS,GCKI,RCKI,DEJU,AMRO,HETH,PISI,AMPI,GCSP,SWTH,YRWA,CHSP,VATH), names_to="SPECIES", values_to="SPECIES_OCCURRENCE") %>%
+  mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor))
 
 ```
 
 ## Calculate diversity
 
-Calculate diversity indices for both land cover and species.
+Calculate diversity indices for both land cover and species. We choose Shannon diversity because of its sensitivity to rare types, which are of interest here.
 
 ```{r calculate diversity}
 
@@ -84,156 +180,243 @@ data <- data %>%
 Run paired t-tests for each land cover type and for land cover diversity.
 We chose paired t-tests because the samples (photographs) are not independent - it's the same landscape at two different times. 
 
-T-tests are relatively robust to deviations from assumptions, but assumptions are:
+T-test assumptions are:
 
 * Continuous data 
 * Random samples 
 * Homogeneity of variance 
 * Distribution approximately normal 
 
+However, t-tests are relatively robust to deviations from assumptions.
 
-```{r land cover change}
+```{r land cover change t-test}
 
-# Prep data
 landcoverdata  <- data %>% 
   select(STATION, TIME, LANDCOVER, LANDCOVER_PERCENT) %>%
   unique()
 
-# Print t-test results for each land cover type
 for (lc in landcovertypes$CODE) {
+  historiccover <- landcoverdata %>% 
+    filter(LANDCOVER==lc, TIME=="Historic") %>% 
+    pull(LANDCOVER_PERCENT)
+  
+  repeatcover <- landcoverdata %>% 
+    filter(LANDCOVER==lc, TIME=="Repeat") %>% 
+    pull(LANDCOVER_PERCENT)
+  
   print(landcovertypes$NAME[which(landcovertypes$CODE==lc)])
-  print(t.test(landcoverdata %>% filter(LANDCOVER==lc, TIME=="Historic") %>% pull(LANDCOVER_PERCENT),
-         landcoverdata %>% filter(LANDCOVER==lc, TIME=="Repeat") %>% pull(LANDCOVER_PERCENT),
-         paired=T))
+  print(t.test(repeatcover, historiccover, paired=T))
 }
 
 # Overall landscape diversity
-print(t.test(data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV),
-             data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV),
-             paired=T))
+historiclcdiv <- data %>% 
+  select(STATION, TIME, LANDCOVER_DIV) %>% 
+  unique() %>% 
+  filter(TIME=="Historic") %>% 
+  pull(LANDCOVER_DIV)
+repeatlcdiv <- data %>% 
+  select(STATION, TIME, LANDCOVER_DIV) %>% 
+  unique() %>% 
+  filter(TIME=="Repeat") %>% 
+  pull(LANDCOVER_DIV)
+print("Overall landscape diversity")
+print(t.test(repeatlcdiv, historiclcdiv, paired=T))
 
 # Historical landscape diversity
-data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV) %>% mean()
-data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(LANDCOVER_DIV) %>% sd()/sqrt(46) # standard error
+historiclcdiv %>% mean()
+historiclcdiv %>% sd()/sqrt(46) # standard error
 
 # Repeat landscape diversity
-data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV) %>% mean()
-data %>% select(STATION, TIME, LANDCOVER_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(LANDCOVER_DIV) %>% sd()/sqrt(46) # standard error
-
+repeatlcdiv %>% mean()
+repeatlcdiv %>% sd()/sqrt(46) # standard error
 
 ```
-Given these outputs, we can see which land cover types changed. We can also be confident that the landscape diversity declined between the historical photos and the repeat photos.
+
+These results suggest that landscape diversity declined between the historical and repeat photos.
+
+We also try with the Wilcoxon's signed-rank test, which is a non-parametric alternative to the paired t-test which does not require the assumption of normality. 
+
+```{r land cover change wilcoxon test}
+
+# Per land cover type
+for (lc in landcovertypes$CODE) {
+  historiccover <- landcoverdata %>% 
+    filter(LANDCOVER==lc, TIME=="Historic") %>% 
+    pull(LANDCOVER_PERCENT)
+  
+  repeatcover <- landcoverdata %>% 
+    filter(LANDCOVER==lc, TIME=="Repeat") %>% 
+    pull(LANDCOVER_PERCENT)
+  
+  print(landcovertypes$NAME[which(landcovertypes$CODE==lc)])
+  print(wilcox.test(repeatcover, historiccover, paired=T, conf.int=T, conf.level=0.95))
+}
+
+# Overall landscape diversity
+print("Overall landscape diversity")
+wilcox.test(repeatlcdiv, historiclcdiv, paired=T, conf.int=T, conf.level=0.95)
+
+```
+
+The Wilcoxon's test throws many warnings, because we have some 0s and some ties (for example, many stations with no broadleaf forest detected), therefore the p-value and confidence intervals cannot be exactly calculated.
+
+Nevertheless, this output also suggests that the landscape diversity declined between the historical photos and the repeat photos. It also shows changes in the same land cover types as the t-test (coniferous forest, wetland, herbaceous, water), plus a few additional ones (shrub, rock, snow/ice).
 
 
 ## Examine bird diversity change
 
-Run paired t-tests for each bird species and for bird diversity.
+Once again we run t-tests, for each bird species and for bird diversity.
 We chose paired t-tests because the samples (photographs) are not independent - it's the same landscape at two different times. 
 
-```{r bird diversity change}
+```{r bird diversity change t-test}
 
 birddata  <- data %>% 
   select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE) %>%
   unique()
 
 for (spp in species$CODE) {
+  historicbird <- birddata %>%
+    filter(SPECIES==spp, TIME=="Historic") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
+  repeatbird <- birddata %>% 
+    filter(SPECIES==spp, TIME=="Repeat") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
   print(species$NAME[which(species$CODE==spp)])
-  print(t.test(birddata %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE),
-               birddata %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE),
-               paired=T))
+  print(t.test(repeatbird, historicbird, paired=T))
 }
 
 # Overall bird diversity
-print(t.test(data %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV),
-             data %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV),
-             paired=T))
+historicbdiv <- data %>% 
+  select(STATION, TIME, SPECIES_DIV) %>% 
+  unique() %>% 
+  filter(TIME=="Historic") %>% 
+  pull(SPECIES_DIV)
+repeatbdiv <- data %>% 
+  select(STATION, TIME, SPECIES_DIV) %>% 
+  unique() %>% 
+  filter(TIME=="Repeat") %>% 
+  pull(SPECIES_DIV)
+
+# T-test
+print("Overall bird diversity")
+print(t.test(repeatbdiv, historicbdiv, paired=T))
 
 ```
 
-At the species level, many species were affected and changed in probability of occurrence between the two time points. However, we cannot say that the species diversity changed significantly between the two time periods.
+At the species level, many species were affected and changed in probability of occurrence between the two time points. 7 species increased (Canada jay, golden-crowned kinglet, ruby-crowned kinglet, dark-eyed junco, Hermit thrush, pine siskin, yellow-rumped warbler) and 4 species declined (Savannah sparrow, American robin, American pipit, chipping sparrow). However, at 95% confidence level, we cannot say that the species diversity changed between the two time periods.
+
+We also run a Wilcoxon's test given it is non-parametric.
+
+```{r bird diversity change wilcoxon test}
+
+# Per species
+for (spp in species$CODE) {
+  historicbird <- birddata %>% 
+    filter(SPECIES==spp, TIME=="Historic") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
+  repeatbird <- birddata %>% 
+    filter(SPECIES==spp, TIME=="Repeat") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
+  print(species$NAME[which(species$CODE==spp)])
+  print(wilcox.test(repeatbird, historicbird, paired=T, conf.int=T, conf.level=0.95))
+}
+
+# Overall bird diversity
+print("Overall bird diversity")
+print(wilcox.test(repeatbdiv, historicbdiv, paired=T, conf.int=T, conf.level=0.95))
+
+```
+
+The Wilcoxon's test shows significant change for all species except varied thrush; in addition to the changes reported above, Wilcoxon suggests declines in Wilson's warblers and Swainson's thrushes and an increase in golden-crowned sparrows. The new total is therefore 9 species increasing and 5 declining. Once again we do not find that there is a significant change in species diversity between the two time points. 
+
+We also run a Hutcheson's t-test which is specifically designed for comparing two samples' Shannon diversity indices.
+
+```{r bird diversity change hutcheson test}
+
+# Overall bird diversity
+print("Overall bird diversity - Hutcheson")
+print(Hutcheson_t_test(repeatbdiv, historicbdiv))
+
+```
+
+This also suggests not much change in Shannon diversity between historical and repeat time periods.
 
 
 ## Plot bird diversity changes
 
-Create a data frame with the t-test outputs to make it easier to plot. 
+Create a data frame with our estimates + confidence intervals for plotting.
 
 ```{r prep to plot}
 
-birddata  <- data %>% 
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE) %>%
-  unique()
-
 df <- data.frame(CODE=NA, ESTIMATE=NA, CI_LOW=NA, CI_HIGH=NA)
 for (spp in species$CODE) {
-  testoutput <- t.test(birddata %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE),
-                       birddata %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE),
-                       paired=T)
+  historicbird <- birddata %>% 
+    filter(SPECIES==spp, TIME=="Historic") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
+  repeatbird <- birddata %>% 
+    filter(SPECIES==spp, TIME=="Repeat") %>% 
+    pull(SPECIES_OCCURRENCE)
+  
+  testoutput <- wilcox.test(repeatbird, historicbird, paired=T, conf.int=T, conf.level=0.95)
   row <- c(spp, testoutput$estimate, testoutput$conf.int[1], testoutput$conf.int[2])
   df <- rbind(df, row)
 }
-df <- df[-1,]# remove the NA row
+df <- df[-1,] # remove the NA row
 
+# Clean columns for later
+df$ESTIMATE <- as.numeric(df$ESTIMATE)*100 # convert to % change (to match BBS estimates)
+df$CI_HIGH <- as.numeric(df$CI_HIGH)*100
+df$CI_LOW <- as.numeric(df$CI_LOW)*100
+df$STUDY <- "Current Study"
 ```
 
 Link to external data on each species:
 
+* Breeding Bird Survey
+
+We load data on long-term trends in population changes from the [North American Breeding Bird Survey](https://wildlife-species.canada.ca/breeding-bird-survey-results/P004/A001/?lang=e&m=b&r=10&p=L) for the Northern Rockies (BCR 10) for comparison.
+
 * Breeding habitat
-* Non-breeding habitat
-* Conservation concern
 
-Source: [State of North America's Birds 2016 Report](https://www.stateofthebirds.org/2016/resources/species-assessments/)
+We also load data on the breeding habitat of species. Taken from the State of North America's Birds 2016 Report, downloaded from: https://www.stateofthebirds.org/2016/resources/species-assessments/
 
-```{r link to external data}
+```{r load external data}
 
-sonab <- read_xlsx(here("ProcessedData","assessment-table-full.xlsx"), sheet="SONAB database for distribution") %>%
+bbs <- read.csv(here("Comparisons/ron_bbs_t20250405.csv")) %>%
+  filter(speciesID %in% species$CODE) %>%
+  mutate(CODE = speciesID,
+         ESTIMATE = percentChange,
+         CI_LOW = percentChangeLLimit,
+         CI_HIGH = percentChangeULimit,
+         STUDY = "BBS") %>%
+  select(CODE, ESTIMATE, CI_LOW, CI_HIGH, STUDY)
+
+sonab <- read_xlsx(here("Comparisons","assessment-table-full.xlsx"), sheet="SONAB database for distribution") %>%
   filter(`English Name` %in% species$NAME) %>%
-  select(`English Name`, `Breeding Habitats`, `Non-breeding Habitats`, CCSmax) %>%
-  rename(NAME = `English Name`) 
-
+  select(`English Name`, `Breeding Habitats`, CCSmax) %>%
+  rename(NAME = `English Name`,
+         BREEDING = `Breeding Habitats`,
+         CONSERVATION = CCSmax) %>%
 # Regroup habitats based on classes that match the categories we used in our analysis
-sonab <- sonab %>%
-  rename(BREEDING = `Breeding Habitats`,
-         NONBREEDING = `Non-breeding Habitats`,
-         CONSERVATION = CCSmax) %>% 
-  mutate(BREEDING = gsub("Arctic tundra", "", BREEDING), # remove classes that don't exist in our study area
-         BREEDING = gsub("Temperate western forest", "", BREEDING), 
-         BREEDING = gsub("Temperate eastern forest", "", BREEDING),
-         BREEDING = gsub("Mexican highland forest", "", BREEDING),
-         BREEDING = gsub("Mexican pine and oak forest", "", BREEDING),
-         BREEDING = gsub("Temperate grassland", "", BREEDING),
-         BREEDING = gsub("Agricultural", "", BREEDING),
-         BREEDING = gsub("Alpine tundra", "Herbaceous", BREEDING), # rename to match our class names
-         BREEDING = gsub("Boreal forest", "Forest", BREEDING),
-         BREEDING = gsub(";", "", BREEDING),
-         BREEDING = trimws(BREEDING)) %>% 
-  mutate(NONBREEDING = gsub("Beach and estuary", "", NONBREEDING), # remove classes that don't exist in our study area
-         NONBREEDING = gsub("Agricultural", "", NONBREEDING),
-         NONBREEDING = gsub("Coastal saltmarsh", "", NONBREEDING),
-         NONBREEDING = gsub("Tropical highland forest", "", NONBREEDING),
-         NONBREEDING = gsub("Temperate grassland", "Herbaceous", NONBREEDING), # rename to match our class names
-         NONBREEDING = gsub("Temperate western forest", "Forest", NONBREEDING),
-         NONBREEDING = gsub("Tropical evergreen forest", "Herbaceous", NONBREEDING),
-         NONBREEDING = gsub("Boreal forest", "Forest", NONBREEDING),
-         NONBREEDING = gsub(";", "", NONBREEDING), 
-         NONBREEDING = trimws(NONBREEDING)) %>% 
-  mutate(CONSERVATION = replace(CONSERVATION, which(CONSERVATION %in% as.character(5:8)), "Low"), # cut offs as per https://www.stateofthebirds.org/2016/overview/methods/
-         CONSERVATION = replace(CONSERVATION, which(CONSERVATION %in% as.character(9:13)), "Moderate")) %>%
+  mutate(BREEDING = replace(BREEDING, grepl("Forest generalist", strsplit(BREEDING, "; ")), "Forest generalist"),
+         BREEDING = replace(BREEDING, grepl("Boreal forest", strsplit(BREEDING, "; ")), "Forest"),
+         BREEDING = replace(BREEDING, grepl("Temperate western forest", strsplit(BREEDING, "; ")), "Forest"),
+         BREEDING = replace(BREEDING, grepl("Alpine tundra", strsplit(BREEDING, "; ")), "Herbaceous")) %>%
   left_join(species, by="NAME")
 
-df <- left_join(df, sonab, by="CODE")
+# Join to dataframe
+df <- rbind(df, bbs)
+df <- left_join(df, sonab, by=c("CODE"))
 
-df$ESTIMATE <- as.numeric(df$ESTIMATE)
-df$CI_LOW <- as.numeric(df$CI_LOW)
-df$CI_HIGH <- as.numeric(df$CI_HIGH)
-df$NAME <- factor(df$NAME)
-df$BREEDING <- factor(df$BREEDING)
-df$NONBREEDING <- factor(df$NONBREEDING)
-df$CONSERVATION <- factor(df$CONSERVATION)
-df$NAMESEP <- factor(df$NAMESEP)
-
-speciesorder <- levels(reorder(df$NAMESEP, df$ESTIMATE)) # we want to use this specific order for all plots
-df$NAMESEP <- factor(df$NAMESEP, speciesorder)
-
+# Reorder species such that plots always appear in the same increasing order for easy comparing
+df <- df %>%
+  mutate(NAMESEP = factor(NAMESEP,
+                          levels = c("Savannah \n Sparrow", "American \n Robin", "American \n Pipit", "Chipping \n Sparrow", "Golden-crowned \n Sparrow", "Varied \n Thrush", "Swainson's \n Thrush", "Ruby-crowned \n Kinglet", "Wilson's \n Warbler", "Golden-crowned \n Kinglet", "Hermit \n Thrush", "Dark-eyed \n Junco", "Gray \n Jay", "Pine \n Siskin", "Yellow-rumped \n Warbler")))
 ```
 
 
@@ -241,26 +424,30 @@ Make plots used in manuscript.
 
 ```{r plot breeding habitat}
 
-plot1 <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=BREEDING)) +
+plottitle <- ifelse(sensitivity == "", "Change in species occurrence",
+                    ifelse(sensitivity == "lb", "Change in species occurrence - lower bound",
+                           ifelse(sensitivity == "ub", "Change in species occurrence - upper bound")))
+
+plot1 <- ggplot(data=df %>% filter(STUDY=="Current Study"), aes(x=NAMESEP, y=ESTIMATE, fill=BREEDING)) +
   theme_bw() +
   geom_bar(stat="identity",position=position_dodge(0.9)) +
   geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
   scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
                                          "Herbaceous" = rgb(153/256,153/256,50/256), 
                                          "Forest generalist" = rgb(95/256,196/256,128/256))) +
-  labs(x="Species",y="Change") +
-  ggtitle("Change in species occurrence \nby breeding habitat") +
+  labs(x="Species",y="Change (%)") +
+  ggtitle(plottitle) +
   theme(plot.title = element_text(hjust = 0.5),
         axis.text  = element_text(),
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
         axis.title = element_text(face="bold"),
         text       = element_text(),
-        # panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
-        # plot.background = element_rect(fill="transparent", colour=NA),
+        panel.background = element_rect(fill="transparent", colour=NA),
+        plot.background = element_rect(fill="transparent", colour=NA),
         panel.grid.minor = element_blank(), 
         panel.grid.major = element_blank(),
         legend.title = element_blank(),
-        legend.position = c(0.01,0.99),
+        legend.position.inside = c(0.01,0.99),
         legend.background = element_blank(),
         legend.justification = c("left","top"))+
   geom_hline(yintercept = 0, linewidth=0.2)
@@ -269,351 +456,83 @@ plot1
 
 ```
 
-As we can see from this plot, species whose main breeding habitat is not forest have declined more than species that breed in forest.
 
 
-``` {r plot non-breeding habitat}
+```{r plot vs bbs}
 
-plot2 <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=NONBREEDING)) +
+plot2a <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=STUDY)) +
   theme_bw() +
   geom_bar(stat="identity",position=position_dodge(0.9)) +
   geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
-  scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
-                                         "Herbaceous" = rgb(153/256,153/256,50/256), 
-                                         "Forest generalist" = rgb(95/256,196/256,128/256),
-                                         "Generalist" = rgb(136/256,35/256,84/256))) +
-  labs(x="Species",y="Change") +
-  ggtitle("Change in species occurrence \nby non-breeding habitat") +
+  labs(x="Species",y="Change (%)") +
+  ggtitle(paste("Change in species occurrence", sensitivity)) +
   theme(plot.title = element_text(hjust = 0.5),
         axis.text  = element_text(),
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
         axis.title = element_text(face="bold"),
         text       = element_text(),
-        panel.grid.minor = element_blank(), 
-        panel.grid.major = element_blank(),
-        legend.title = element_blank(),
-        legend.position = c(0.01,0.99),
-        legend.background = element_blank(),
-        legend.justification = c("left","top"))+
-  geom_hline(yintercept = 0, linewidth=0.2)
-        
-plot2
-
-```
-
-As we can see from this plot, species' non-breeding habitat does not show a clear correlation with direction of change. Generally, forest-dwelling species are positively affected and herbaceous-dwelling species are negatively affected.
-
-
-``` {r plot conservation concern}
-
-plot3 <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=CONSERVATION)) +
-  theme_bw() +
-  geom_bar(stat="identity",position=position_dodge(0.9)) +
-  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
-  scale_fill_manual("Legend", values = c("Low" = rgb(136/256,205/256,238/256),
-                                         "Moderate" = rgb(188/256,94/256,109/256))) +
-  labs(x="Species",y="Change") +
-  ggtitle("Change in species occurrence \nby level of conservation concern") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.text  = element_text(),
-        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
-        axis.title = element_text(face="bold"),
-        text       = element_text(),
-        panel.grid.minor = element_blank(), 
-        panel.grid.major = element_blank(),
-        legend.title = element_blank(),
-        legend.position = c(0.01,0.99),
-        legend.background = element_blank(),
-        legend.justification = c("left","top"))+
-  geom_hline(yintercept = 0, linewidth=0.2)
-       
-plot3
-
-```
-
-As we can see from this plot, the level of conservation concern of the species does not show a clear correlation with direction of change.
-
-
-## Sensitivity Analysis
-
-Our species distribution models report coefficients as well as standard errors (SE).
-To ensure we are dealing with error propagation, we run a sensitivity analysis. The results we produced for the main text show the model predictions using the mean coefficients. Here we also show the predictions using coefficient-SE and coefficient+SE and evaluate whether our conclusions change.
-
-Load the lower bound (coefficient-SE) and upper bound (coefficient+SE) data.
-
-```{r load lower bound}
-
-historicdata_lb <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Historic") %>%
-  mutate(TIME = "Historic")
-repeatdata_lb <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx"), sheet="Repeat") %>%
-  mutate(TIME = "Repeat")
-data_lb <- rbind(historicdata_lb, repeatdata_lb) %>%
-  pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
-  pivot_longer(cols=GRAJ:VATH, names_to="SPECIES", values_to="SPECIES_OCCURRENCE_LB") %>%
-  mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor)) %>%
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_LB) %>%
-  distinct()
-
-data_lb <- data_lb %>%
-  group_by(STATION, TIME) %>%
-  mutate(SPECIES_DIV = diversity(SPECIES_OCCURRENCE_LB, index="shannon")) %>%
-  ungroup()
-
-# Historical bird diversity, lower bound
-data_lb %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV) %>% mean()
-
-# Repeat bird diversity, lower bound
-data_lb %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV) %>% mean()
-
-```
-
-```{r load upper bound}
-
-historicdata_ub <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Historic") %>%
-  mutate(TIME = "Historic")
-repeatdata_ub <- read_xlsx(here("ProcessedData","ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx"), sheet="Repeat") %>%
-  mutate(TIME = "Repeat")
-data_ub <- rbind(historicdata_ub, repeatdata_ub) %>%
-  pivot_longer(cols=CF:SN, names_to="LANDCOVER", values_to="LANDCOVER_PERCENT") %>%
-  pivot_longer(cols=GRAJ:VATH, names_to="SPECIES", values_to="SPECIES_OCCURRENCE_UB") %>%
-  mutate(across(c(STATION, TIME, LANDCOVER, SPECIES), as.factor)) %>%
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_UB) %>%
-  distinct()
-
-data_ub <- data_ub %>%
-  group_by(STATION, TIME) %>%
-  mutate(SPECIES_DIV = diversity(SPECIES_OCCURRENCE_UB, index="shannon")) %>%
-  ungroup()
-
-# Historical bird diversity, upper bound
-data_ub %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV) %>% mean()
-
-# Repeat bird diversity, upper bound
-data_ub %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV) %>% mean()
-
-```
-
-
-Re-run the paired t-tests with the lower bound (coefficient-SE) and upper bound (coefficient+SE) on individual species and on species diversity.
-
-``` {r bird diversity change lower bound}
-
-birddata_lb  <- data_lb %>% 
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_LB) %>%
-  unique()
-
-for (spp in species$CODE) {
-  print(species$NAME[which(species$CODE==spp)])
-  print(t.test(birddata_lb %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE_LB),
-               birddata_lb %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE_LB),
-               paired=T))
-}
-
-# Overall bird diversity
-print(t.test(data_lb %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV),
-             data_lb %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV),
-             paired=T))
-```
-
-``` {r bird diversity change upper bound}
-
-birddata_ub  <- data_ub %>% 
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_UB) %>%
-  unique()
-
-for (spp in species$CODE) {
-  print(species$NAME[which(species$CODE==spp)])
-  print(t.test(birddata_ub %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE_UB),
-               birddata_ub %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE_UB),
-               paired=T))
-}
-
-# Overall bird diversity
-print(t.test(data_ub %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Historic") %>% pull(SPECIES_DIV),
-             data_ub %>% select(STATION, TIME, SPECIES_DIV) %>% unique() %>% filter(TIME=="Repeat") %>% pull(SPECIES_DIV),
-             paired=T))
-```
-
-
-At the species level, many species were affected and changed in probability of occurrence between the two time points; some positively, some negatively. This is true for both the lower bound and upper bound predictions.
-Overall, based on the lower bound predictions, we cannot say that species diversity changed between the time steps (mean difference -0.004, CI=[-0.007,0.00008], t=-1.969, df=45, p-value=0.055). However, using the upper bound predictions, species diversity decreased slightly (mean difference 0.013, CI=[0.002,0.026], t=2.369, df=45, p-value=0.022).
-
-Create a data frame with the t-test outputs to make it easier to compare.
-
-```{r create dataframes}
-
-birddata_lb  <- data_lb %>% 
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_LB) %>%
-  unique()
-
-df_lb <- data.frame(CODE=NA, ESTIMATE=NA, CI_LOW=NA, CI_HIGH=NA)
-for (spp in species$CODE) {
-  testoutput <- t.test(birddata_lb %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE_LB),
-                       birddata_lb %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE_LB),
-                       paired=T)
-  row <- c(spp, testoutput$estimate, testoutput$conf.int[1], testoutput$conf.int[2])
-  df_lb <- rbind(df_lb, row)
-}
-df_lb <- df_lb[-1,] %>% # remove the NA row
-  mutate(DIRECTION_LB=ifelse(ESTIMATE<0 & CI_LOW<0 & CI_HIGH<0, "NEGATIVE",
-                      ifelse(ESTIMATE>0 & CI_LOW>0 & CI_HIGH>0, "POSITIVE",
-                         "NULL")))
-
-birddata_ub  <- data_ub %>% 
-  select(STATION, TIME, SPECIES, SPECIES_OCCURRENCE_UB) %>%
-  unique()
-
-df_ub <- data.frame(CODE=NA, ESTIMATE=NA, CI_LOW=NA, CI_HIGH=NA)
-for (spp in species$CODE) {
-  testoutput <- t.test(birddata_ub %>% filter(SPECIES==spp, TIME=="Historic") %>% pull(SPECIES_OCCURRENCE_UB),
-                       birddata_ub %>% filter(SPECIES==spp, TIME=="Repeat") %>% pull(SPECIES_OCCURRENCE_UB),
-                       paired=T)
-  row <- c(spp, testoutput$estimate, testoutput$conf.int[1], testoutput$conf.int[2])
-  df_ub <- rbind(df_ub, row)
-}
-df_ub <- df_ub[-1,] %>% # remove the NA row
-  mutate(DIRECTION_UB=ifelse(ESTIMATE<0 & CI_LOW<0 & CI_HIGH<0, "NEGATIVE",
-                          ifelse(ESTIMATE>0 & CI_LOW>0 & CI_HIGH>0, "POSITIVE",
-                                 "NULL")))
-
-df_mean <- df %>%
-  select(CODE, ESTIMATE, CI_LOW, CI_HIGH) %>%
-  mutate(DIRECTION_MEAN=ifelse(ESTIMATE<0 & CI_LOW<0 & CI_HIGH<0, "NEGATIVE",
-                          ifelse(ESTIMATE>0 & CI_LOW>0 & CI_HIGH>0, "POSITIVE",
-                                 "NULL")))
-
-df_merge <- left_join(df_mean, df_lb, by="CODE") %>%
-  left_join(df_ub, by="CODE") %>%
-  select(CODE, DIRECTION_LB, DIRECTION_MEAN, DIRECTION_UB) %>%
-  distinct()
-
-df_merge
-
-```
-
-
-As we can see from the above table, for most species (10/15), there was no difference in conclusions. For 5 of the 15 species, the result changed from "no evidence of change" to either positive or negative. That being said, there are no situations in which the direction of change switched from "negative" to "positive" or vice-versa between the lower, mean and upper bound predictions.
-
-Let's prep for plotting.
-
-```{r link lower bound to external data}
-
-df_lb <- left_join(df_lb, sonab, by="CODE")
-
-df_lb$ESTIMATE <- as.numeric(df_lb$ESTIMATE)
-df_lb$CI_LOW <- as.numeric(df_lb$CI_LOW)
-df_lb$CI_HIGH <- as.numeric(df_lb$CI_HIGH)
-df_lb$NAME <- factor(df_lb$NAME)
-df_lb$BREEDING <- factor(df_lb$BREEDING)
-df_lb$NONBREEDING <- factor(df_lb$NONBREEDING)
-df_lb$CONSERVATION <- factor(df_lb$CONSERVATION)
-df_lb$NAMESEP <- factor(df_lb$NAMESEP, levels=speciesorder)
-
-```
-
-```{r link upper bound to external data}
-
-df_ub <- left_join(df_ub, sonab, by="CODE")
-
-df_ub$ESTIMATE <- as.numeric(df_ub$ESTIMATE)
-df_ub$CI_LOW <- as.numeric(df_ub$CI_LOW)
-df_ub$CI_HIGH <- as.numeric(df_ub$CI_HIGH)
-df_ub$NAME <- factor(df_ub$NAME)
-df_ub$BREEDING <- factor(df_ub$BREEDING)
-df_ub$NONBREEDING <- factor(df_ub$NONBREEDING)
-df_ub$CONSERVATION <- factor(df_ub$CONSERVATION)
-df_ub$NAMESEP <- factor(df_ub$NAMESEP, levels=speciesorder)
-
-```
-
-
-Recreate Figure 4 from the main text with the lower and upper bound values to visualize these differences.
-
-```{r plot lower bound}
-
-plot4 <- ggplot(data=df_lb, aes(x=NAMESEP, y=ESTIMATE, fill=BREEDING)) +
-  theme_bw() +
-  geom_bar(stat="identity",position=position_dodge(0.9)) +
-  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
-  scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
-                                         "Herbaceous" = rgb(153/256,153/256,50/256), 
-                                         "Forest generalist" = rgb(95/256,196/256,128/256))) +
-  labs(x="Species",y="Change") +
-  ggtitle("Change in species occurrence \nby breeding habitat (lower bound)") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.text  = element_text(),
-        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
-        axis.title = element_text(face="bold"),
-        text       = element_text(),
-        panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
+        panel.background = element_rect(fill="transparent", colour=NA),
         plot.background = element_rect(fill="transparent", colour=NA),
         panel.grid.minor = element_blank(), 
         panel.grid.major = element_blank(),
         legend.title = element_blank(),
-        legend.position = c(0.01,0.99),
+        legend.position.inside = c(0.01,0.99),
         legend.background = element_blank(),
         legend.justification = c("left","top"))+
   geom_hline(yintercept = 0, linewidth=0.2)
         
-plot4
+plot2a
 
-```
-
-
-```{r plot upper bound}
-
-plot5 <- ggplot(data=df_ub, aes(x=NAMESEP, y=ESTIMATE, fill=BREEDING)) +
+plot2b <- ggplot(data=df, aes(x=NAMESEP, y=ESTIMATE, fill=STUDY)) +
   theme_bw() +
   geom_bar(stat="identity",position=position_dodge(0.9)) +
-  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW) ,position=position_dodge(0.9),width=0.25) +
-  scale_fill_manual("Legend", values = c("Forest" = rgb(19/256,119/256,51/256), 
-                                         "Herbaceous" = rgb(153/256,153/256,50/256), 
-                                         "Forest generalist" = rgb(95/256,196/256,128/256))) +
-  labs(x="Species",y="Change") +
-  ggtitle("Change in species occurrence \nby breeding habitat (upper bound)") +
+  geom_errorbar(aes(ymax=CI_HIGH, ymin=CI_LOW), position=position_dodge(0.9),width=0.25) +
+  labs(x="Species",y="Change (%)") +
+  ylim(c(-100,100)) +
+  ggtitle(paste("Change in species occurrence", sensitivity)) +
   theme(plot.title = element_text(hjust = 0.5),
         axis.text  = element_text(),
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1),
         axis.title = element_text(face="bold"),
         text       = element_text(),
-        panel.background = element_rect(fill="transparent", colour=NA), # transparent background for graphic artist to overlay figure elements
+        panel.background = element_rect(fill="transparent", colour=NA),
         plot.background = element_rect(fill="transparent", colour=NA),
         panel.grid.minor = element_blank(), 
         panel.grid.major = element_blank(),
         legend.title = element_blank(),
-        legend.position = c(0.01,0.99),
+        legend.position.inside = c(0.01,0.99),
         legend.background = element_blank(),
         legend.justification = c("left","top"))+
   geom_hline(yintercept = 0, linewidth=0.2)
         
-plot5
+plot2b
+
+```
+
+On the first plot it is very difficult to see because of the very wide error bars on the Golden-crowned sparrow. So we create a second plot, clipping y values to (-1,1).
+
+We see relatively large differences in change estimates between our estimates and the Breeding Bird Survey. The Breeding Bird Survey changes span the years 1970-2022 for most species. 
+
+The most notable potential explanation is the fact that the BBS changes are for the entire Northern Rockies Bird Conservation Region (BCR), which is a very large area spanning the Columbia and Rocky mountain ranges in British Columbia and Alberta, whereas our study area is just a small fraction of the total BCR. Plus, the landscape change across the whole BCR - which includes industrial areas, urban areas, forestry, etc. - is likely higher than what has been observed in our highly protected area in the Willmore Wilderness Park over the same time period. Therefore our sample is not representative of the same population that the BBS conservation region covers.
+
+
+## Save outputs
+
+``` {r save plots}
+
+ggsave(plot = plot1, file = paste0("./Plots/plot1_", sensitivity, ".png"), 
+       type = "cairo-png",  bg = "white",
+       width = 20, height = 15, units = "cm", dpi = 300)
+
+ggsave(plot = plot2a, file = paste0("./Plots/plot2a_", sensitivity, ".png"), 
+       type = "cairo-png",  bg = "white",
+       width = 20, height = 15, units = "cm", dpi = 300)
+
+ggsave(plot = plot2b, file = paste0("./Plots/plot2b_", sensitivity, ".png"), 
+       type = "cairo-png",  bg = "white",
+       width = 20, height = 15, units = "cm", dpi = 300)
 
 ```
 
 
-``` {r save plots, include=FALSE, eval=FALSE}
-
-# Save all plots to output files
-
-ggsave(plot = plot1, file = "Fig4.png", 
-       type = "cairo-png",  bg = "transparent",
-       width = 20, height = 15, units = "cm", dpi = 300)
-
-ggsave(plot = plot2, file = "FigS1a.png", 
-       type = "cairo-png",  bg = "transparent",
-       width = 20, height = 15, units = "cm", dpi = 300)
-
-ggsave(plot = plot3, file = "FigS1b.png", 
-       type = "cairo-png",  bg = "transparent",
-       width = 20, height = 15, units = "cm", dpi = 300)
-
-ggsave(plot = plot4, file = "FigS2a.png",
-       type = "cairo-png",  bg = "transparent",
-       width = 20, height = 15, units = "cm", dpi = 300)
-
-ggsave(plot = plot5, file = "FigS2c.png",
-       type = "cairo-png",  bg = "transparent",
-       width = 20, height = 15, units = "cm", dpi = 300)
-
-```
 
