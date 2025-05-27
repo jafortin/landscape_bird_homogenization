@@ -26,11 +26,13 @@ The data is split into two folders:
   - *LandsatBasedClassifiedMapClasses.txt* is the legend for the Landsat-based raster
   - *Photographs.zip* contains the 46 photograph pairs as found on the [Mountain Legacy Project website](explore.mountainlegacy.ca)
 - ProcessedData
-  - *assessment-table-full.xlsx* is external data downloaded from [NABCI's State of North America's Birds 2016 Report](https://www.stateofthebirds.org/2016/resources/species-assessments/) which lists breeding habitat, non-breeding habitat and level of conservation concern for various bird species
   - *ImageAnalysis.xlsx* is a summary of the processed data from *LandCoverClassifications.zip* as well as the backtransformations from the species distribution models. It contains both land cover proportions in the photograph pairs as well as bird occurrence probabilities at each site
-  - *ImageAnalysis_SensitivityAnalysis_MinusSE.xlsx* and *ImageAnalysis_SensitivityAnalysis_PlusSE.xlsx* are the same as *ImageAnalysis.xlsx* except that the values are generated using the species distribution model's beta-coefficients minus the standard error, and plus the standard error, respectively, to be used for sensitivity analysis
-  - *LandcoverLookup.csv* is a lookup table for the different land cover category codes
-  - *SpeciesLookup.csv* is a lookup table for the different bird species codes
+
+- Comparisons
+  - *assessment-table-full.xlsx* is external data downloaded from [NABCI's State of North America's Birds 2016 Report](https://www.stateofthebirds.org/2016/resources/species-assessments/) which lists breeding habitat for various bird species
+  - *ron_bbs_t20250405.csv* is external data downloaded from the [Government of Canada's website on the North American Breeding Bird Survey](https://wildlife-species.canada.ca/breeding-bird-survey-results/P004/A001/?lang=e&m=b&r=10&p=L) which lists long-term population trends for various bird species
+- *LandcoverLookup.csv* is a lookup table for the different land cover category codes
+- *SpeciesLookup.csv* is a lookup table for the different bird species codes
 
 
 
@@ -39,4 +41,4 @@ The data is split into two folders:
 - BirdDiversityAnalysis.Rmd
   - This file walks through the code that analyzes land cover and bird diversity change
   - This file also generates the figures in the associated publication
-  - The pdf is the knitted (formatted) output of this Rmd file
+  - The html is the knitted (formatted) output of this Rmd file
